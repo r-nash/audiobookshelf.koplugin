@@ -189,6 +189,9 @@ function Audiobookshelf:addToMainMenu(menu_items)
             },
             {
                 text_func = function()
+                    if not self.ui.document then
+                        return _("Open a book to link or sync progress")
+                    end
                     if ProgressSync.current_mapping then
                         return _("Linked: ") .. (ProgressSync.current_mapping.title or "Unknown")
                     else

@@ -1,3 +1,12 @@
+## 0.2.1 (2026-11-09)
+
+- Read status in the browser: ● finished, ◐ started (reading or listening), ○ not started; series show how many books are read (ideas from paucapo's fork)
+- Podcast libraries are hidden
+- Progress sync uses KOReader's own reading percentage and jumps by percentage, which is more accurate for EPUBs
+- In the file browser, the menu says to open a book instead of only greying out the sync items
+- Removed the deprecated `name` field from _meta.lua
+- Added tests (`sh tests/run.sh`, needs luajit), including a check that no `for _,` loop hides gettext
+
 ## 0.2.0 (2026-11-09, combined build)
 
 - Back navigation: X, the Back key, swipe down and a back arrow step up one level (book page, search, series, library); the plugin only closes from the top level

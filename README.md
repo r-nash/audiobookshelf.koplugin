@@ -65,3 +65,7 @@ You can also set these in `audiobookshelf_config.lua`:
     ["auto_pull_on_open"] = true,
 }
 ```
+
+## Development
+
+`sh tests/run.sh` runs the plugin's real code against stand-ins for KOReader (needs `luajit`). It starts from a copy with no config file, and covers navigation, series grouping, read status and progress sync.

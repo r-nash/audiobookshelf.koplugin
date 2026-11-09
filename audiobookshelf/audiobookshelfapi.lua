@@ -134,6 +134,23 @@ function AudiobookshelfApi:getSearchResults(id, search_query)
     return self:get(path)
 end
 
+-- All of the user's progress, keyed by library item id, from one request.
+-- Returns nil if it can't be fetched.
+function AudiobookshelfApi:getAllProgress()
+    local me = self:get("/api/me")
+    if not me or type(me.mediaProgress) ~= "table" then
+        return nil
+    end
+    local map = {}
+    for __, p in ipairs(me.mediaProgress) do
+        -- skip podcast episodes; books have no episodeId
+        if p.libraryItemId and not p.episodeId then
+            map[p.libraryItemId] = p
+        end
+    end
+    return map
+end
+
 function AudiobookshelfApi:getProgress(library_item_id)
     return self:get("/api/me/progress/" .. library_item_id, { timeout_block = 3, timeout_total = 6 })
 end

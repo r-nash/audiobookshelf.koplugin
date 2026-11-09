@@ -7,6 +7,7 @@ local Menu = require("ui/widget/menu")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local UIManager = require("ui/uimanager")
 local _ = require("gettext")
+local T = require("ffi/util").template
 local logger = require("logger")
 
 local AudiobookshelfBrowser = Menu:extend{
@@ -47,18 +48,38 @@ function AudiobookshelfBrowser:genItemTableFromLibraries()
         return item_table
     end
     for _, library in ipairs(libraries) do
-        table.insert(item_table, {
-            text = library.name,
-            type = "library",
-            id = library.id,
-        })
+        -- podcast libraries have no ebooks
+        if library.mediaType == nil or library.mediaType == "book" then
+            table.insert(item_table, {
+                text = library.name,
+                type = "library",
+                id = library.id,
+            })
+        end
     end
     return item_table
 end
 
-local function bookEntry(id, metadata)
+-- Read status from Audiobookshelf: finished, started (reading or listening),
+-- or not started. Every row gets a mark so titles stay aligned.
+local STATUS_MARK = { finished = "● ", started = "◐ ", none = "○ " }
+
+local function readStatus(progress)
+    if not progress then return "none" end
+    if progress.isFinished then return "finished" end
+    if (progress.ebookProgress or 0) > 0 or (progress.progress or 0) > 0
+            or (progress.currentTime or 0) > 0 then
+        return "started"
+    end
+    return "none"
+end
+
+local function bookEntry(id, metadata, progress_map)
     local author = metadata.authorName
     local text = metadata.title or ""
+    if progress_map then
+        text = STATUS_MARK[readStatus(progress_map[id])] .. text
+    end
     if author and author ~= "" then
         text = text .. " by " .. author
     end
@@ -262,8 +283,10 @@ function AudiobookshelfBrowser:loadLibrarySearch(search)
         })
         return
     end
+    -- nil if it can't be fetched; the list then just shows without marks
+    local progress_map = AudiobookshelfApi:getAllProgress()
     for _, item in ipairs(libraryItems.book) do
-        table.insert(tbl, bookEntry(item.libraryItem.id, item.libraryItem.media.metadata))
+        table.insert(tbl, bookEntry(item.libraryItem.id, item.libraryItem.media.metadata, progress_map))
     end
 
     -- a new search replaces the current results, so Back still returns to
@@ -285,6 +308,8 @@ function AudiobookshelfBrowser:openLibrary(id, name)
         return false
     end
 
+    local progress_map = AudiobookshelfApi:getAllProgress()
+
     -- Books in a series are grouped into one entry per series, listed first.
     local tbl = {}
     local series_map = {}
@@ -304,7 +329,7 @@ function AudiobookshelfBrowser:openLibrary(id, name)
                 seq_str = seq,
             })
         else
-            table.insert(tbl, bookEntry(item.id, metadata))
+            table.insert(tbl, bookEntry(item.id, metadata, progress_map))
         end
     end
 
@@ -313,11 +338,24 @@ function AudiobookshelfBrowser:openLibrary(id, name)
     for __, series in ipairs(series_order) do
         local books = series_map[series]
         table.sort(books, function(a, b) return a.sequence < b.sequence end)
+        local text, mandatory = series, tostring(#books) .. " " .. (#books == 1 and _("book") or _("books"))
+        if progress_map then
+            local finished, started = 0, false
+            for __, book in ipairs(books) do
+                local status = readStatus(progress_map[book.id])
+                if status == "finished" then finished = finished + 1 end
+                if status ~= "none" then started = true end
+            end
+            local mark = finished == #books and "finished" or (started and "started" or "none")
+            text = STATUS_MARK[mark] .. series
+            mandatory = T(_("%1/%2 read"), finished, #books)
+        end
         table.insert(series_entries, {
-            text = series,
-            mandatory = tostring(#books) .. " " .. (#books == 1 and _("book") or _("books")),
+            text = text,
+            mandatory = mandatory,
             type = "series",
             series_books = books,
+            progress_map = progress_map,
         })
     end
     for i, entry in ipairs(series_entries) do
@@ -332,9 +370,11 @@ end
 function AudiobookshelfBrowser:openSeries(item)
     local tbl = {}
     for _, book in ipairs(item.series_books) do
-        local entry = bookEntry(book.id, book.metadata)
+        local entry = bookEntry(book.id, book.metadata, item.progress_map)
         if book.seq_str then
-            entry.text = book.seq_str .. ". " .. entry.text
+            -- keep the read mark first: "● 3. Title"
+            local mark = item.progress_map and STATUS_MARK[readStatus(item.progress_map[book.id])] or ""
+            entry.text = mark .. book.seq_str .. ". " .. entry.text:sub(#mark + 1)
         end
         table.insert(tbl, entry)
     end

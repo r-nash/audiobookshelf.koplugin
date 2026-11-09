@@ -64,19 +64,26 @@ function ProgressSync:calculateProgress()
         return nil
     end
 
-    local ok, current, total = pcall(function()
-        return self.ui:getCurrentPage(), self.ui.document:getPageCount()
+    -- KOReader's own reading percentage: the same figure as its status bar,
+    -- and more precise than page / total for reflowable books.
+    local ok, current, total, percent = pcall(function()
+        local reader = self.ui.document.info.has_pages and self.ui.paging or self.ui.rolling
+        return self.ui:getCurrentPage(), self.ui.document:getPageCount(), reader:getLastPercent()
     end)
 
     if not ok or not current or not total or total == 0 then
         logger.warn("ProgressSync: failed to calculate progress")
         return nil
     end
+    if type(percent) ~= "number" or percent ~= percent then
+        percent = current / total
+    end
+    percent = math.max(0, math.min(1, percent))
 
     return {
         page = current,
         total_pages = total,
-        percent = current / total,
+        percent = math.floor(percent * 10000 + 0.5) / 10000,
         timestamp = os.time(),
     }
 end
@@ -246,18 +253,16 @@ function ProgressSync:applyServerProgress(server_progress)
         return
     end
 
-    local total_pages = self.ui.document:getPageCount()
     local server_percent = server_progress.ebookProgress or server_progress.progress or 0
-    local target_page = math.floor(server_percent * total_pages)
-    target_page = math.max(1, math.min(target_page, total_pages))
+    server_percent = math.max(0, math.min(1, server_percent))
 
-    logger.dbg("ProgressSync: applying server progress, going to page", target_page)
+    logger.dbg("ProgressSync: applying server progress, going to", server_percent * 100, "%")
 
     local Event = require("ui/event")
-    self.ui:handleEvent(Event:new("GotoPage", target_page))
+    self.ui:handleEvent(Event:new("GotoPercent", server_percent * 100))
 
     UIManager:show(InfoMessage:new{
-        text = T(_("Moved to page %1."), target_page),
+        text = T(_("Moved to %1%% (page %2)."), math.floor(server_percent * 100), self.ui:getCurrentPage()),
         timeout = 2,
     })
 end
