@@ -289,7 +289,7 @@ function AudiobookshelfBrowser:openLibrary(id, name)
     local tbl = {}
     local series_map = {}
     local series_order = {}
-    for _, item in ipairs(libraryItems) do
+    for __, item in ipairs(libraryItems) do
         local metadata = item.media.metadata
         local series, seq = firstSeries(metadata.seriesName)
         if series then
@@ -310,7 +310,7 @@ function AudiobookshelfBrowser:openLibrary(id, name)
 
     table.sort(series_order, function(a, b) return a:lower() < b:lower() end)
     local series_entries = {}
-    for _, series in ipairs(series_order) do
+    for __, series in ipairs(series_order) do
         local books = series_map[series]
         table.sort(books, function(a, b) return a.sequence < b.sequence end)
         table.insert(series_entries, {

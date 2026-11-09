@@ -37,15 +37,17 @@ Click on the name of one of the Downloadable files, and follow the process to do
 
 The plugin can sync your reading progress between KOReader and Audiobookshelf.
 
-**Automatic linking:** Books downloaded through the plugin are automatically linked to their Audiobookshelf entry.
+**Automatic linking:** Books downloaded through the plugin are automatically linked to their Audiobookshelf entry. Only a book's main ebook file is linked, because Audiobookshelf keeps one reading position per book. Links are stored in KOReader's `settings/audiobookshelf_mappings.lua`, so they survive reinstalling the plugin.
 
 **Manual linking:** For books you already have on your device, open the book, go to Tools > Audiobookshelf > "Not linked to Audiobookshelf", search for the book, and select the matching entry.
 
 **Sync triggers:**
-- **On book close:** Progress is pushed when you close a book
-- **On page turns:** Progress is pushed after a configurable number of page turns (default: 5)
+- **On book close and on sleep:** Progress is pushed when you close a book or the device goes to sleep
+- **On page turns:** After a configurable number of page turns (default: 5), progress is pushed once you pause on a page for about 10 seconds, so a page turn never waits on the network
 - **On book open:** Server progress is checked and you're prompted if it differs from local
-- **Manual:** Use "Push progress now" or "Pull progress now" from the menu
+- **Manual:** Use "Push progress now" or "Pull progress now" from the menu (turns Wi-Fi on if needed)
+
+Automatic syncs only run when the device is already online; they never turn Wi-Fi on. If the server can't be reached, automatic syncs pause for 10 minutes. Reaching the end of a book marks it finished on the server; the plugin never marks a book unfinished, so it can't reset a finished book or its audiobook position.
 
 **Settings:** Go to Tools > Audiobookshelf > Sync settings to configure:
 - Auto-push on book close (on/off)
