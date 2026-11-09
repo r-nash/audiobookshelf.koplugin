@@ -131,6 +131,7 @@ function BookDetailsWidget:genFileList()
                 size_in_bytes =  file.metadata.size,
                 book_id = self.book_info.id,
                 show_parent = self,
+                book_title = self.book_info.media.metadata.title,
                 -- pass a zero-arg closure that closes the plugin when opening the book
                 onClose = function()
                     self:onCloseAll()
