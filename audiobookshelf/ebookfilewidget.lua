@@ -16,7 +16,7 @@ local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
 local LeftContainer = require("ui/widget/container/leftcontainer")
-local LuaSettings = require("luasettings")
+local Settings = require("audiobookshelf/settings")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local ReaderUI = require("apps/reader/readerui")
 local RightContainer = require("ui/widget/container/rightcontainer")
@@ -37,16 +37,11 @@ local EbookFileWidget = InputContainer:extend{
     size_in_bytes = 0,
     book_id = nil,
     book_title = nil,
+    is_primary = false,
     width = nil,
     side_margin = Size.padding.fullscreen,
     onClose = nil -- function to close whole parent menu path after download
 }
-
-function EbookFileWidget:readSettings()
-    local config_file = string.gsub(debug.getinfo(1).source, "^@(.+/)[^/]+$", "%1") .. "/../audiobookshelf_config.lua"
-    self.abs_settings = LuaSettings:open(config_file)
-    return self.abs_settings
-end
 
 function EbookFileWidget:init()
     self.small_font = Font:getFace("smallffont")
@@ -149,8 +144,12 @@ function EbookFileWidget:downloadFile()
             local code = AudiobookshelfApi:downloadFile(self.book_id, self.ino, safeFilename, path)
             if code == 200 then
                 local full_path = path .. "/" .. safeFilename
-                BookMapping:setMapping(full_path, self.book_id, self.ino, self.book_title or self.filename)
-                logger.dbg("EbookFileWidget: linked downloaded book to", self.book_id)
+                -- Audiobookshelf keeps one reading position per book, so only the
+                -- book's main ebook file is linked for progress sync.
+                if self.is_primary then
+                    BookMapping:setMapping(full_path, self.book_id, self.ino, self.book_title or self.filename)
+                    logger.dbg("EbookFileWidget: linked downloaded book to", self.book_id)
+                end
 
                 local confirm = ConfirmBox:new{
                     text = T(_("File saved to:\n%1\nWould you like to read the downloaded book now?"),
@@ -189,8 +188,7 @@ function EbookFileWidget:downloadFile()
             original_filename, filesize_str, filename, BD.dirpath(path))
     end
 
-    local abs_settings = self:readSettings()
-    local download_dir = abs_settings:readSetting("download_dir") or G_reader_settings:readSetting("lastdir")
+    local download_dir = Settings:read("download_dir") or G_reader_settings:readSetting("lastdir")
     local chosen_filename = self.filename
 
     local buttons = {
@@ -200,8 +198,7 @@ function EbookFileWidget:downloadFile()
                 callback = function()
                     require("ui/downloadmgr"):new{
                         onConfirm = function(path)
-                            abs_settings:saveSetting("download_dir", path)
-                            abs_settings:flush()
+                            Settings:save("download_dir", path)
                             download_dir = path
                             self.download_dialog:setTitle(genTitle(self.filename, self.size_in_bytes, chosen_filename, path))
                         end,

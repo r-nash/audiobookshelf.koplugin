@@ -7,23 +7,25 @@ local socket = require("socket")
 local logger = require("logger")
 local RenderImage = require("ui/renderimage")
 local util = require("util")
-local LuaSettings = require("luasettings")
+local Settings = require("audiobookshelf/settings")
 
 local VERSION = require("audiobookshelf_version")
 
-local config_file = string.gsub(debug.getinfo(1).source, "^@(.+/)[^/]+$", "%1") .. "/../audiobookshelf_config.lua"
-local AudiobookshelfApi = {
-    abs_settings = LuaSettings:open(config_file)
-}
+local AudiobookshelfApi = {}
 
 -- Execute an API request and return response body and code
 -- opts: { method, path, body, timeout_block, timeout_total, sink }
 function AudiobookshelfApi:request(opts)
+    local server, token = Settings:getServer(), Settings:getToken()
+    if not server or not token then
+        return nil, nil, "not_configured"
+    end
+
     local sink = opts.sink or {}
     local use_table_sink = not opts.sink
 
     local headers = {
-        ["Authorization"] = "Bearer " .. self.abs_settings:readSetting("token"),
+        ["Authorization"] = "Bearer " .. token,
         ["User-Agent"] = T("audiobookshelf.koplugin/%1", table.concat(VERSION, ".")),
     }
     if opts.body then
@@ -32,7 +34,7 @@ function AudiobookshelfApi:request(opts)
     end
 
     local request = {
-        url = self.abs_settings:readSetting("server") .. opts.path,
+        url = server .. opts.path,
         method = opts.method or "GET",
         headers = headers,
         sink = use_table_sink and ltn12.sink.table(sink) or opts.sink,
@@ -133,7 +135,7 @@ function AudiobookshelfApi:getSearchResults(id, search_query)
 end
 
 function AudiobookshelfApi:getProgress(library_item_id)
-    return self:get("/api/me/progress/" .. library_item_id, { timeout_block = 5, timeout_total = 10 })
+    return self:get("/api/me/progress/" .. library_item_id, { timeout_block = 3, timeout_total = 6 })
 end
 
 function AudiobookshelfApi:updateProgress(library_item_id, progress_data)
@@ -142,17 +144,17 @@ function AudiobookshelfApi:updateProgress(library_item_id, progress_data)
         path = "/api/me/progress/" .. library_item_id,
         method = "PATCH",
         body = body,
-        timeout_block = 5,
-        timeout_total = 10,
+        timeout_block = 3,
+        timeout_total = 6,
     })
 
     if not response then
         logger.warn("AudiobookshelfApi: updateProgress failed:", status)
         return nil, "network_error"
     end
+    -- the server answers a successful update with a plain "OK", not JSON
     if code == 200 then
-        local _, result = pcall(JSON.decode, response)
-        return result
+        return true
     end
     logger.warn("AudiobookshelfApi: cannot update progress", library_item_id, code)
     logger.warn("AudiobookshelfApi: error:", response)

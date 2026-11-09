@@ -2,6 +2,7 @@ local AudiobookshelfApi = require("audiobookshelf/audiobookshelfapi")
 local BookMapping = require("audiobookshelf/bookmapping")
 local ConfirmBox = require("ui/widget/confirmbox")
 local InfoMessage = require("ui/widget/infomessage")
+local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 local logger = require("logger")
 local _ = require("gettext")
@@ -10,14 +11,39 @@ local T = require("ffi/util").template
 local ProgressSync = {
     MIN_SYNC_INTERVAL = 25,
     DEFAULT_PAGE_THRESHOLD = 5,
+    -- push this long after the last page turn, so it runs while you read a
+    -- page rather than when you turn one
+    IDLE_PUSH_DELAY = 10,
+    -- after an automatic sync fails, don't retry automatically for this long,
+    -- so an unreachable server can't stall reading every few pages
+    FAILURE_BACKOFF = 600,
 
     ui = nil,
     last_sync_time = 0,
     page_turn_count = 0,
     current_mapping = nil,
+    backoff_until = 0,
 }
 
+-- Automatic syncs only run when already online: they never turn Wi-Fi on or
+-- show a connection prompt, and they stay quiet after a recent failure.
+function ProgressSync:canAutoSync()
+    if os.time() < self.backoff_until then
+        return false
+    end
+    return NetworkMgr:isOnline()
+end
+
+function ProgressSync:noteResult(ok, err)
+    if ok then
+        self.backoff_until = 0
+    elseif err == "network_error" or err == "api_error" then
+        self.backoff_until = os.time() + self.FAILURE_BACKOFF
+    end
+end
+
 function ProgressSync:init(ui)
+    self:cancelScheduledPush()
     self.ui = ui
     self.last_sync_time = 0
     self.page_turn_count = 0
@@ -84,8 +110,13 @@ function ProgressSync:pushProgress(blocking, callback)
 
     local progress_data = {
         ebookProgress = local_progress.percent,
-        isFinished = local_progress.percent >= 0.99,
     }
+    -- Only ever report "finished". Sending isFinished = false makes the server
+    -- un-finish the book and reset the audiobook position to 0 whenever the
+    -- book was already finished, e.g. after listening to it.
+    if local_progress.percent >= 0.99 then
+        progress_data.isFinished = true
+    end
 
     logger.dbg("ProgressSync: pushing progress", local_progress.percent, "to", self.current_mapping.library_item_id)
 
@@ -94,6 +125,7 @@ function ProgressSync:pushProgress(blocking, callback)
         progress_data
     )
 
+    self:noteResult(result, err)
     if result then
         self.last_sync_time = os.time()
         BookMapping:updateLastSync(self.ui.document.file)
@@ -116,12 +148,13 @@ function ProgressSync:pullProgress(callback)
 
     local server_progress, err = AudiobookshelfApi:getProgress(self.current_mapping.library_item_id)
 
-    if err == "no_progress" then
+    if err == "not_found" then
         logger.dbg("ProgressSync: no server progress exists")
         if callback then callback(true, nil) end
         return
     end
 
+    self:noteResult(server_progress ~= nil, err)
     if not server_progress then
         logger.warn("ProgressSync: pull failed:", err)
         if callback then callback(false, err) end
@@ -242,15 +275,34 @@ function ProgressSync:onPageTurn(settings)
     self.page_turn_count = self.page_turn_count + 1
 
     local threshold = (settings and settings.page_threshold) or self.DEFAULT_PAGE_THRESHOLD
-    if self.page_turn_count >= threshold then
-        self.page_turn_count = 0
-        if self:shouldSync() then
-            self:pushProgress(false)
+    -- once a push is due, keep delaying it until page turns stop for a moment
+    if self.push_task or self.page_turn_count >= threshold then
+        self:schedulePush()
+    end
+end
+
+function ProgressSync:schedulePush()
+    self:cancelScheduledPush()
+    self.push_task = function()
+        self.push_task = nil
+        if not self.current_mapping or not self:canAutoSync() then
+            return
         end
+        self.page_turn_count = 0
+        self:pushProgress(false)
+    end
+    UIManager:scheduleIn(self.IDLE_PUSH_DELAY, self.push_task)
+end
+
+function ProgressSync:cancelScheduledPush()
+    if self.push_task then
+        UIManager:unschedule(self.push_task)
+        self.push_task = nil
     end
 end
 
 function ProgressSync:reset()
+    self:cancelScheduledPush()
     self.ui = nil
     self.last_sync_time = 0
     self.page_turn_count = 0

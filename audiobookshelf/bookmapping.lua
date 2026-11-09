@@ -1,8 +1,11 @@
+local DataStorage = require("datastorage")
 local LuaSettings = require("luasettings")
 local logger = require("logger")
 
 local BookMapping = {
-    mappings_file = "plugins/audiobookshelf.koplugin/audiobookshelf_mappings.lua",
+    -- Kept in KOReader's settings folder, not the plugin folder, so links
+    -- survive reinstalling or replacing the plugin.
+    mappings_file = DataStorage:getSettingsDir() .. "/audiobookshelf_mappings.lua",
     mappings = nil,
 }
 

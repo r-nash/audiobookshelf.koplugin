@@ -10,14 +10,20 @@ local InputDialog = require("ui/widget/inputdialog")
 local SpinWidget = require("ui/widget/spinwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local LuaSettings = require("luasettings")
+local Settings = require("audiobookshelf/settings")
 local _ = require("gettext")
 local logger = require("logger")
 
 local Audiobookshelf = WidgetContainer:extend{
     name = "audiobookshelf",
     is_doc_only = false,
-    settings = nil,
+}
+
+local DEFAULT_SYNC_SETTINGS = {
+    auto_push_on_close = true,
+    auto_push_on_page_turn = true,
+    page_threshold = 5,
+    auto_pull_on_open = true,
 }
 
 function Audiobookshelf:onDispatcherRegisterActions()
@@ -38,36 +44,29 @@ end
 function Audiobookshelf:init()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
-    self:loadSettings()
 
     if self.ui.document then
         self:initSyncForDocument()
     end
 end
 
-function Audiobookshelf:loadSettings()
-    self.settings = LuaSettings:open("plugins/audiobookshelf.koplugin/audiobookshelf_config.lua")
-end
-
 function Audiobookshelf:getSyncSettings()
-    if not self.settings then
-        self:loadSettings()
+    local saved = Settings:read("sync") or {}
+    local merged = {}
+    for key, value in pairs(DEFAULT_SYNC_SETTINGS) do
+        if saved[key] == nil then
+            merged[key] = value
+        else
+            merged[key] = saved[key]
+        end
     end
-    return self.settings:readSetting("sync") or {
-        enabled = true,
-        auto_push_on_close = true,
-        auto_push_on_page_turn = true,
-        page_threshold = 5,
-        auto_pull_on_open = true,
-        show_notifications = true,
-    }
+    return merged
 end
 
 function Audiobookshelf:saveSyncSetting(key, value)
     local sync_settings = self:getSyncSettings()
     sync_settings[key] = value
-    self.settings:saveSetting("sync", sync_settings)
-    self.settings:flush()
+    Settings:save("sync", sync_settings)
 end
 
 function Audiobookshelf:initSyncForDocument()
@@ -81,7 +80,9 @@ function Audiobookshelf:onReaderReady()
     local sync_settings = self:getSyncSettings()
     if sync_settings.auto_pull_on_open and ProgressSync.current_mapping then
         UIManager:scheduleIn(0.5, function()
-            ProgressSync:checkAndPromptServerProgress(false)
+            if ProgressSync.current_mapping and ProgressSync:canAutoSync() then
+                ProgressSync:checkAndPromptServerProgress(false)
+            end
         end)
     end
 end
@@ -93,10 +94,23 @@ end
 
 function Audiobookshelf:onCloseDocument()
     local sync_settings = self:getSyncSettings()
-    if sync_settings.auto_push_on_close and ProgressSync.current_mapping then
+    if sync_settings.auto_push_on_close and ProgressSync.current_mapping
+            and ProgressSync:canAutoSync() then
         ProgressSync:pushProgress(true)
     end
     ProgressSync:reset()
+end
+
+-- Most reading sessions end with the cover closed, not the book, so also
+-- push when the device goes to sleep (if still online).
+function Audiobookshelf:onSuspend()
+    if not self.ui.document then return end
+    local sync_settings = self:getSyncSettings()
+    if sync_settings.auto_push_on_close and ProgressSync.current_mapping
+            and ProgressSync:canAutoSync() then
+        ProgressSync:cancelScheduledPush()
+        ProgressSync:pushProgress(true)
+    end
 end
 
 function Audiobookshelf:onABSPushProgress()
@@ -108,18 +122,20 @@ function Audiobookshelf:onABSPushProgress()
         return true
     end
 
-    ProgressSync:pushProgress(true, function(success, err)
-        if success then
-            UIManager:show(InfoMessage:new{
-                text = _("Progress pushed to server."),
-                timeout = 2,
-            })
-        else
-            UIManager:show(InfoMessage:new{
-                text = _("Failed to push progress."),
-                timeout = 3,
-            })
-        end
+    NetworkMgr:runWhenOnline(function()
+        ProgressSync:pushProgress(true, function(success, err)
+            if success then
+                UIManager:show(InfoMessage:new{
+                    text = _("Progress pushed to server."),
+                    timeout = 2,
+                })
+            else
+                UIManager:show(InfoMessage:new{
+                    text = _("Failed to push progress."),
+                    timeout = 3,
+                })
+            end
+        end)
     end)
     return true
 end
@@ -133,7 +149,9 @@ function Audiobookshelf:onABSPullProgress()
         return true
     end
 
-    ProgressSync:checkAndPromptServerProgress(true)
+    NetworkMgr:runWhenOnline(function()
+        ProgressSync:checkAndPromptServerProgress(true)
+    end)
     return true
 end
 
@@ -301,7 +319,9 @@ function Audiobookshelf:showLinkDialog()
                         local query = self.link_dialog:getInputText()
                         UIManager:close(self.link_dialog)
                         if query and #query > 0 then
-                            self:searchAndShowLinkResults(query)
+                            NetworkMgr:runWhenOnline(function()
+                                self:searchAndShowLinkResults(query)
+                            end)
                         end
                     end,
                 },

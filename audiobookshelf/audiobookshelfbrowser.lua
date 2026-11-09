@@ -2,7 +2,7 @@ local AudiobookshelfApi = require("audiobookshelf/audiobookshelfapi")
 local BookDetailsWidget = require("audiobookshelf/bookdetailswidget")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
-local LuaSettings = require("luasettings")
+local Settings = require("audiobookshelf/settings")
 local Menu = require("ui/widget/menu")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local UIManager = require("ui/uimanager")
@@ -18,26 +18,26 @@ local AudiobookshelfBrowser = Menu:extend{
     show_parent = nil
 }
 
--- levels:
--- abs
--- library
+-- Navigation: the top level lists libraries. Opening a library, a series or a
+-- search pushes the current list onto self.paths; Back (the X button, the Back
+-- key, swipe down or the bottom-left arrow) pops it, so it returns to exactly
+-- the list and page you came from. The plugin only closes from the top level.
 function AudiobookshelfBrowser:init()
-    local config_file = string.gsub(debug.getinfo(1).source, "^@(.+/)[^/]+$", "%1") .. "/../audiobookshelf_config.lua"
-    self.abs_settings = LuaSettings:open(config_file)
-    self.abs_settings:saveSetting("token", self.abs_settings:readSetting("token"))
-    self.abs_settings:flush()
     self.show_parent = self
     self.level = "abs"
-    if self.item then
-    else
-        self.item_table = self:genItemTableFromLibraries()
-    end
-    self.root_item_table = self.item_table
+    self.current_title = self.title
+    self.item_table = self:genItemTableFromLibraries()
     Menu.init(self)
+    if not Settings:isConfigured() then
+        UIManager:nextTick(function() self:configAudiobookshelf() end)
+    end
 end
 
 function AudiobookshelfBrowser:genItemTableFromLibraries()
     local item_table = {}
+    if not Settings:isConfigured() then
+        return item_table
+    end
     local libraries = AudiobookshelfApi:getLibraries()
     if not libraries then
         UIManager:show(InfoMessage:new{
@@ -56,21 +56,57 @@ function AudiobookshelfBrowser:genItemTableFromLibraries()
     return item_table
 end
 
+local function bookEntry(id, metadata)
+    local author = metadata.authorName
+    local text = metadata.title or ""
+    if author and author ~= "" then
+        text = text .. " by " .. author
+    end
+    return { id = id, text = text, type = "book" }
+end
+
+-- Audiobookshelf gives seriesName as "Name #3", or "A #1, B #2" for a book in
+-- several series. Group by the first series listed.
+local function firstSeries(series_name)
+    if not series_name or series_name == "" then return nil end
+    local name, seq = series_name:match("^(.-) #([%d%.]+)")
+    if name and name ~= "" then
+        return name, seq
+    end
+    return series_name, nil
+end
+
+function AudiobookshelfBrowser:getFirstVisibleItemNumber()
+    return ((self.page or 1) - 1) * (self.perpage or 1) + 1
+end
+
+-- Show a new list one level down, remembering the current one for Back.
+function AudiobookshelfBrowser:pushList(level, title, item_table)
+    table.insert(self.paths, {
+        level = self.level,
+        title = self.current_title,
+        item_table = self.item_table,
+        return_item = self:getFirstVisibleItemNumber(),
+    })
+    self:showList(level, title, item_table)
+end
+
+function AudiobookshelfBrowser:showList(level, title, item_table, item_number)
+    self.level = level
+    self.current_title = title
+    self:setTitleBarLeftIcon(level == "abs" and "appbar.settings" or "appbar.search")
+    self:switchItemTable(title, item_table, item_number)
+end
+
 function AudiobookshelfBrowser:onMenuSelect(item)
     if item.type == "library" then
-        table.insert(self.paths, {
-            id = item.id,
-            type = "library",
-            name = item.text,
-            return_item = self:getFirstVisibleItemNumber(),
-        })
-        if not self:openLibrary(item.id, item.text) then
-            table.remove(self.paths)
-        end
+        self:openLibrary(item.id, item.text)
+    elseif item.type == "series" then
+        self:openSeries(item)
     elseif item.type == "book" then
-        -- Pass a zero-argument closure so the child calls the parent correctly
         local bookdetailswidget = BookDetailsWidget:new{
             book_id = item.id,
+            -- used to close the whole plugin when opening a downloaded book
             onCloseParent = function()
                 self:onCloseAllMenus()
             end,
@@ -80,34 +116,20 @@ function AudiobookshelfBrowser:onMenuSelect(item)
     return true
 end
 
-function AudiobookshelfBrowser:getFirstVisibleItemNumber()
-    return ((self.page or 1) - 1) * (self.perpage or 1) + 1
-end
-
 -- Defining onReturn makes Menu show its bottom-left back arrow.
 function AudiobookshelfBrowser:onReturn()
-    local leaving = table.remove(self.paths)
-    if not leaving then
+    local parent = table.remove(self.paths)
+    if not parent then
         return false
     end
-    local parent = self.paths[#self.paths]
-    if parent then
-        -- search results -> library
-        self:switchItemTable(parent.name, self.library_item_table, leaving.return_item)
-    else
-        -- library -> list of libraries
-        self.level = "abs"
+    if parent.level == "abs" then
         self.library_id = nil
-        self.library_item_table = nil
         self.search_value = nil
-        self:setTitleBarLeftIcon("appbar.settings")
-        self:switchItemTable(self.title, self.root_item_table, leaving.return_item)
     end
+    self:showList(parent.level, parent.title, parent.item_table, parent.return_item)
     return true
 end
 
--- The X button, Back key and swipe down step back one level; they only quit
--- the plugin from the top level.
 function AudiobookshelfBrowser:onClose()
     if #self.paths > 0 then
         return self:onReturn()
@@ -127,16 +149,16 @@ end
 function AudiobookshelfBrowser:onLeftButtonTap()
     if self.level == "abs" then
         self:configAudiobookshelf()
-    elseif self.level == "library" then
+    else
         self:ShowSearch()
     end
 end
 
 function AudiobookshelfBrowser:configAudiobookshelf()
     local hint_server = "Audiobookshelf Server Url"
-    local text_server = self.abs_settings:readSetting("server", "")
+    local text_server = Settings:read("server", "")
     local hint_token = "Audiobookshelf API Token"
-    local text_token = self.abs_settings:readSetting("token", "")
+    local text_token = Settings:read("token", "")
     local title = "Audiobookshelf Settings"
     self.settings_dialog = MultiInputDialog:new {
         title = title,
@@ -166,11 +188,9 @@ function AudiobookshelfBrowser:configAudiobookshelf()
                     text = "Save",
                     callback = function()
                         local fields = self.settings_dialog:getFields()
-                        logger.warn(fields)
 
-                        self.abs_settings:saveSetting("server", fields[1])
-                        self.abs_settings:saveSetting("token", fields[2])
-                        self.abs_settings:flush()
+                        Settings:save("server", fields[1])
+                        Settings:save("token", fields[2])
 
                         self.settings_dialog:onClose()
                         UIManager:close(self.settings_dialog)
@@ -179,6 +199,10 @@ function AudiobookshelfBrowser:configAudiobookshelf()
                             text = "Settings saved",
                             timeout = 1
                         })
+                        if self.level == "abs" then
+                            self.item_table = self:genItemTableFromLibraries()
+                            self:showList("abs", self.title, self.item_table)
+                        end
                     end
                 }
             }
@@ -238,30 +262,20 @@ function AudiobookshelfBrowser:loadLibrarySearch(search)
         })
         return
     end
-    logger.warn(libraryItems)
     for _, item in ipairs(libraryItems.book) do
-        table.insert(tbl, {
-            id = item.libraryItem.id,
-            text = item.libraryItem.media.metadata.title,
-            mandatory = item.libraryItem.media.metadata.authorName,
-            type = "book"
-        })
+        table.insert(tbl, bookEntry(item.libraryItem.id, item.libraryItem.media.metadata))
     end
 
-    -- a new search replaces the current results, so Back still returns to the library
-    if self.paths[#self.paths].type ~= "search" then
-        table.insert(self.paths, {
-            type = "search",
-            return_item = self:getFirstVisibleItemNumber(),
-        })
+    -- a new search replaces the current results, so Back still returns to
+    -- where the first search started
+    if self.level == "search" then
+        self:showList("search", _("Search Results"), tbl)
+    else
+        self:pushList("search", _("Search Results"), tbl)
     end
-
-    self:setTitleBarLeftIcon("appbar.search")
-    self:switchItemTable("Search Results", tbl)
 end
 
 function AudiobookshelfBrowser:openLibrary(id, name)
-    local tbl = {}
     local libraryItems = AudiobookshelfApi:getLibraryItems(id)
     if not libraryItems then
         UIManager:show(InfoMessage:new{
@@ -270,19 +284,61 @@ function AudiobookshelfBrowser:openLibrary(id, name)
         })
         return false
     end
+
+    -- Books in a series are grouped into one entry per series, listed first.
+    local tbl = {}
+    local series_map = {}
+    local series_order = {}
     for _, item in ipairs(libraryItems) do
-        table.insert(tbl, {
-            id = item.id,
-            text = item.media.metadata.title .. " by " .. item.media.metadata.authorName,
-            type = "book"
+        local metadata = item.media.metadata
+        local series, seq = firstSeries(metadata.seriesName)
+        if series then
+            if not series_map[series] then
+                series_map[series] = {}
+                table.insert(series_order, series)
+            end
+            table.insert(series_map[series], {
+                id = item.id,
+                metadata = metadata,
+                sequence = tonumber(seq) or math.huge,
+                seq_str = seq,
+            })
+        else
+            table.insert(tbl, bookEntry(item.id, metadata))
+        end
+    end
+
+    table.sort(series_order, function(a, b) return a:lower() < b:lower() end)
+    local series_entries = {}
+    for _, series in ipairs(series_order) do
+        local books = series_map[series]
+        table.sort(books, function(a, b) return a.sequence < b.sequence end)
+        table.insert(series_entries, {
+            text = series,
+            mandatory = tostring(#books) .. " " .. (#books == 1 and _("book") or _("books")),
+            type = "series",
+            series_books = books,
         })
+    end
+    for i, entry in ipairs(series_entries) do
+        table.insert(tbl, i, entry)
     end
 
     self.library_id = id
-    self.library_item_table = tbl
-    self.level = "library"
-    self:setTitleBarLeftIcon("appbar.search")
-    self:switchItemTable(name, tbl)
+    self:pushList("library", name, tbl)
+    return true
+end
+
+function AudiobookshelfBrowser:openSeries(item)
+    local tbl = {}
+    for _, book in ipairs(item.series_books) do
+        local entry = bookEntry(book.id, book.metadata)
+        if book.seq_str then
+            entry.text = book.seq_str .. ". " .. entry.text
+        end
+        table.insert(tbl, entry)
+    end
+    self:pushList("series", item.text, tbl)
     return true
 end
 

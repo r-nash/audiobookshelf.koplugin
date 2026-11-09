@@ -132,6 +132,8 @@ function BookDetailsWidget:genFileList()
                 book_id = self.book_info.id,
                 show_parent = self,
                 book_title = self.book_info.media.metadata.title,
+                is_primary = self.book_info.media.ebookFile ~= nil
+                    and self.book_info.media.ebookFile.ino == file.ino,
                 -- pass a zero-arg closure that closes the plugin when opening the book
                 onClose = function()
                     self:onCloseAll()
