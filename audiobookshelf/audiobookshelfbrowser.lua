@@ -32,6 +32,7 @@ function AudiobookshelfBrowser:init()
     else
         self.item_table = self:genItemTableFromLibraries()
     end
+    self.root_item_table = self.item_table
     Menu.init(self)
 end
 
@@ -60,20 +61,67 @@ function AudiobookshelfBrowser:onMenuSelect(item)
         table.insert(self.paths, {
             id = item.id,
             type = "library",
-            name = item.text
+            name = item.text,
+            return_item = self:getFirstVisibleItemNumber(),
         })
-        self:openLibrary(item.id, item.text)
+        if not self:openLibrary(item.id, item.text) then
+            table.remove(self.paths)
+        end
     elseif item.type == "book" then
         -- Pass a zero-argument closure so the child calls the parent correctly
         local bookdetailswidget = BookDetailsWidget:new{
             book_id = item.id,
             onCloseParent = function()
-                self:onClose()
+                self:onCloseAllMenus()
             end,
         }
         UIManager:show(bookdetailswidget, "flashui")
     end
     return true
+end
+
+function AudiobookshelfBrowser:getFirstVisibleItemNumber()
+    return ((self.page or 1) - 1) * (self.perpage or 1) + 1
+end
+
+-- Defining onReturn makes Menu show its bottom-left back arrow.
+function AudiobookshelfBrowser:onReturn()
+    local leaving = table.remove(self.paths)
+    if not leaving then
+        return false
+    end
+    local parent = self.paths[#self.paths]
+    if parent then
+        -- search results -> library
+        self:switchItemTable(parent.name, self.library_item_table, leaving.return_item)
+    else
+        -- library -> list of libraries
+        self.level = "abs"
+        self.library_id = nil
+        self.library_item_table = nil
+        self.search_value = nil
+        self:setTitleBarLeftIcon("appbar.settings")
+        self:switchItemTable(self.title, self.root_item_table, leaving.return_item)
+    end
+    return true
+end
+
+-- The X button, Back key and swipe down step back one level; they only quit
+-- the plugin from the top level.
+function AudiobookshelfBrowser:onClose()
+    if #self.paths > 0 then
+        return self:onReturn()
+    end
+    return Menu.onClose(self)
+end
+
+-- Menu doesn't refresh the arrow's enabled state for an empty list, which would
+-- leave it disabled in a library or search with no results.
+function AudiobookshelfBrowser:updatePageInfo(select_number)
+    Menu.updatePageInfo(self, select_number)
+    if #self.item_table == 0 then
+        self.page_return_arrow:enableDisable(#self.paths > 0)
+    end
 end
 
 function AudiobookshelfBrowser:onLeftButtonTap()
@@ -200,6 +248,14 @@ function AudiobookshelfBrowser:loadLibrarySearch(search)
         })
     end
 
+    -- a new search replaces the current results, so Back still returns to the library
+    if self.paths[#self.paths].type ~= "search" then
+        table.insert(self.paths, {
+            type = "search",
+            return_item = self:getFirstVisibleItemNumber(),
+        })
+    end
+
     self:setTitleBarLeftIcon("appbar.search")
     self:switchItemTable("Search Results", tbl)
 end
@@ -224,6 +280,7 @@ function AudiobookshelfBrowser:openLibrary(id, name)
     end
 
     self.library_id = id
+    self.library_item_table = tbl
     self.level = "library"
     self:setTitleBarLeftIcon("appbar.search")
     self:switchItemTable(name, tbl)

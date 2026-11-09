@@ -34,7 +34,14 @@ local BookDetailsWidget = FocusManager:extend{
     onCloseParent = nil,
 }
 
+-- Returns to the book list.
 function BookDetailsWidget:onClose()
+    UIManager:close(self, "flashui")
+    return true
+end
+
+-- Closes the whole plugin, used when opening a downloaded book in the reader.
+function BookDetailsWidget:onCloseAll()
     UIManager:close(self)
     if self.onCloseParent then
         -- call as a zero-argument function to avoid passing this widget as `self`
@@ -124,9 +131,9 @@ function BookDetailsWidget:genFileList()
                 size_in_bytes =  file.metadata.size,
                 book_id = self.book_info.id,
                 show_parent = self,
-                -- pass a zero-arg closure that will call this widget's onClose
+                -- pass a zero-arg closure that closes the plugin when opening the book
                 onClose = function()
-                    self:onClose()
+                    self:onCloseAll()
                 end,
             }
             table.insert(list, file_widget)
